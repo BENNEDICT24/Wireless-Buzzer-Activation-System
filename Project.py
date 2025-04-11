@@ -1,51 +1,65 @@
-import RPi.GPIO as GPIO
 import socket
+import RPi.GPIO as GPIO
 
-# Configure the GPIO for the buzzer
-BUZZER_PIN = 18
+BUZZER_PIN = 23
+FREQ = 1000
+
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(BUZZER_PIN, GPIO.OUT)
+GPIO.setup(BUZZER_PIN, GPIO.OUT, initial=GPIO.LOW)
+pwm = GPIO.PWM(BUZZER_PIN, FREQ)
+pwm_started = False
 
-# Server settings
-SERVER_IP = '0.0.0.0'  # Listen on all available interfaces
-SERVER_PORT = 12345     # Port to listen on
-
-# Create a UDP socket
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-server_socket.bind((SERVER_IP, SERVER_PORT))  # Bind the server to the specified IP and port
-
-print("Server listening on port", SERVER_PORT)
-
-def control_buzzer(command):
-    """Control the buzzer based on the command received."""
-    if command == 'ACTIVATE':
-        GPIO.output(BUZZER_PIN, GPIO.HIGH)  # Activate the buzzer
-        print("Buzzer activated")
-        return "Buzzer Activated"
-    elif command == 'DEACTIVATE':
-        GPIO.output(BUZZER_PIN, GPIO.LOW)   # Deactivate the buzzer
-        print("Buzzer deactivated")
-        return "Buzzer Deactivated"
-    else:
-        print("Invalid command")
-        return "Invalid command"
-
-try:
-    while True:
-        # The server listens for incoming UDP packets using recvfrom.
-        data, client_address = server_socket.recvfrom(1024)  # 'recvfrom' is the listening method
-        command = data.decode('utf-8')
-
-        print(f"Received command: {command} from {client_address}")
+def handle_pwm_command(command):
+    global pwm_started
+    command = command.strip().lower()
+    
+    if command == "activate":
+        if not pwm_started:
+            pwm.start(50)
+            pwm_started = True
+            print("Buzzer activated")
+            return "Buzzer activated"
+        else:
+            return "Buzzer is already activated"
         
-        # Control the buzzer based on the command received and get a response
-        response = control_buzzer(command)
-
-        # Send a response back to the client
-        server_socket.sendto(response.encode('utf-8'), client_address)
-
-except KeyboardInterrupt:
-    print("Server shutting down...")
-finally:
-    GPIO.cleanup()
-    server_socket.close()
+    elif command == "deactivate":
+        if pwm_started:
+            pwm.stop()
+            pwm_started = False
+            print("Buzzer deactivated")
+            return "Buzzer deactivated"
+        else:
+            return "Buzzer is already deactivated"
+        
+    elif command == "exit":
+            if pwm_started:
+                pwm.stop()
+            GPIO.cleanup()
+            print("Server is exiting")
+            return "Server is exiting"
+            
+    else:
+            return "Unknown Command"
+        
+def run_pwm_server(host="172.21.12.32", port=12345):
+    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as s:
+        s.bind((host,port))
+        print(f"Buzzer server listening on {host}:{port}")
+        
+        while True:
+            data, addr = s.recvfrom(1024)
+            command = data.decode()
+            response = handle_pwm_command(command)
+            s.sendto(response.encode(), addr)
+            
+            if command.strip().lower() == "exit":
+                break
+                
+if __name__=="__main__":
+    try:
+        run_pwm_server()
+    except KeyboardInterrupt:
+        if pwm_started:
+            pwm.stop()
+        GPIO.cleanup()
+        print("Interrupted. GPIO cleaned up.")
