@@ -1,51 +1,73 @@
-import RPi.GPIO as GPIO
 import socket
+import RPi.GPIO as GPIO
 
-# Configure the GPIO for the buzzer
-BUZZER_PIN = 18
+# Constants for buzzer pin and PWM frequency
+BUZZER_PIN = 23
+FREQ = 1000
+
+# GPIO setup for buzzer
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(BUZZER_PIN, GPIO.OUT)
+GPIO.setup(BUZZER_PIN, GPIO.OUT, initial=GPIO.LOW)
+pwm = GPIO.PWM(BUZZER_PIN, FREQ)
+pwm_started = False  # Flag to track buzzer state
 
-# Server settings
-SERVER_IP = '0.0.0.0'  # Listen on all available interfaces
-SERVER_PORT = 12345     # Port to listen on
+def handle_pwm_command(command):
+    """
+    Processes commands to activate, deactivate, or stop the server.
+    """
+    global pwm_started
+    command = command.strip().lower()  # Clean and normalize the command
 
-# Create a UDP socket
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-server_socket.bind((SERVER_IP, SERVER_PORT))  # Bind the server to the specified IP and port
-
-print("Server listening on port", SERVER_PORT)
-
-def control_buzzer(command):
-    """Control the buzzer based on the command received."""
-    if command == 'ACTIVATE':
-        GPIO.output(BUZZER_PIN, GPIO.HIGH)  # Activate the buzzer
-        print("Buzzer activated")
-        return "Buzzer Activated"
-    elif command == 'DEACTIVATE':
-        GPIO.output(BUZZER_PIN, GPIO.LOW)   # Deactivate the buzzer
-        print("Buzzer deactivated")
-        return "Buzzer Deactivated"
-    else:
-        print("Invalid command")
-        return "Invalid command"
-
-try:
-    while True:
-        # The server listens for incoming UDP packets using recvfrom.
-        data, client_address = server_socket.recvfrom(1024)  # 'recvfrom' is the listening method
-        command = data.decode('utf-8')
-
-        print(f"Received command: {command} from {client_address}")
+    if command == "activate":
+        if not pwm_started:
+            pwm.start(50)  # Start PWM with 50% duty cycle
+            pwm_started = True
+            return "Buzzer activated"
+        else:
+            return "Buzzer is already activated"
         
-        # Control the buzzer based on the command received and get a response
-        response = control_buzzer(command)
+    elif command == "deactivate":
+        if pwm_started:
+            pwm.stop()  # Stop the buzzer
+            pwm_started = False
+            return "Buzzer deactivated"
+        else:
+            return "Buzzer is already deactivated"
+        
+    elif command == "exit":
+        if pwm_started:
+            pwm.stop()  # Ensure buzzer is off before exiting
+        GPIO.cleanup()  # Clean up GPIO settings
+        return "Server is exiting"
+    
+    else:
+        return "Unknown Command"  # Handle invalid commands
 
-        # Send a response back to the client
-        server_socket.sendto(response.encode('utf-8'), client_address)
+def run_pwm_server(host="172.21.12.32", port=12345):
+    """
+    Starts a UDP server that listens for commands to control the buzzer.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.bind((host, port))  # Bind the server to a specific IP and port
+        print(f"Buzzer server listening on {host}:{port}")
+        
+        while True:
+            data, addr = s.recvfrom(1024)  # Receive data from client
+            command = data.decode()  # Decode the command
+            response = handle_pwm_command(command)  # Process the command
+            s.sendto(response.encode(), addr)  # Send back the response
+            
+            if command.strip().lower() == "exit":
+                break  # Exit the server if the "exit" command is received
 
-except KeyboardInterrupt:
-    print("Server shutting down...")
-finally:
-    GPIO.cleanup()
-    server_socket.close()
+if __name__ == "__main__":
+    """
+    Main function that starts the server and handles cleanup on interrupt.
+    """
+    try:
+        run_pwm_server()  # Start the server
+    except KeyboardInterrupt:
+        if pwm_started:
+            pwm.stop()  # Stop PWM if it was running
+        GPIO.cleanup()  # Clean up GPIO settings on exit
+        print("Interrupted. GPIO cleaned up.")
